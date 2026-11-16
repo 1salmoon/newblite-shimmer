@@ -1,0 +1,121 @@
+name: build-newb-lite
+
+# Build Newb X Legacy Lite By Zeyy dari source (hasil: .mcpack untuk MB Loader).
+# Actions -> build-newb-lite -> Run workflow, download artifact .mcpack,
+# tes di game. Nilai kalibrasi glow matahari bisa diubah lewat input.
+# Folder proyek (yang berisi build.sh + requirements.txt) dicari otomatis,
+# jadi aman walau repo berisi subfolder (mis. newb-lite-zeyy/).
+# Kalau repo hanya berisi file zip source, zip diekstrak otomatis.
+on:
+  workflow_dispatch:
+    inputs:
+      sun_yaw:
+        description: 'NL_SUN_PATH_YAW (derajat, 0 = vanilla)'
+        default: '0.0'
+      sun_tilt:
+        description: 'NL_SUN_PATH_TILT (derajat, 0 = vanilla)'
+        default: '0.0'
+      glow_offset:
+        description: 'NL_SUN_GLOW_YAW_OFFSET (derajat, +/- membalik arah geser)'
+        default: '0.0'
+      shimmer:
+        description: 'NL_GLOW_SHIMMER (0.1 halus ~ 1.0 kuat)'
+        default: '0.8'
+      shimmer_speed:
+        description: 'NL_GLOW_SHIMMER_SPEED (0.5 lambat ~ 2.0 cepat)'
+        default: '0.9'
+      subversion:
+        description: 'Sub-version (eg: 46)'
+        default: '1'
+      platform:
+        description: 'Target platform'
+        default: 'android'
+        type: choice
+        options:
+        - android
+        - ios
+        - windows
+        - multiplatform
+
+jobs:
+  build:
+    runs-on: ${{ (inputs.platform == 'windows' || inputs.platform == 'multiplatform') && 'windows-2022' || 'ubuntu-latest' }}
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Ekstrak zip source (jika repo hanya berisi zip)
+      shell: bash
+      run: |
+        if ! find . -name build.sh -not -path "./.git/*" | grep -q .; then
+          z=""
+          for f in $(find . -maxdepth 2 -name "*.zip" -not -path "./.git/*"); do
+            if unzip -l "$f" | grep -q "build.sh"; then z="$f"; break; fi
+          done
+          if [ -n "$z" ]; then
+            echo "Mengekstrak $z"
+            mkdir -p _src && unzip -q "$z" -d _src
+          fi
+        fi
+
+    - name: Cari folder proyek
+      shell: bash
+      run: |
+        req=$(find . -name requirements.txt -not -path "*/node_modules/*" -not -path "./.git/*" | while read -r f; do d=$(dirname "$f"); [ -f "$d/build.sh" ] && echo "$d" && break; done)
+        if [ -z "$req" ]; then
+          echo "::error::requirements.txt + build.sh tidak ditemukan di repo. Isi repo:"
+          ls -la
+          exit 1
+        fi
+        echo "PROJECT_DIR=$req" >> "$GITHUB_ENV"
+        echo "Folder proyek: $req"
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.14'
+
+    - uses: actions/cache@v6
+      with:
+        key: env-files-${{ (inputs.platform == 'windows' || inputs.platform == 'multiplatform') && 'win' || 'linux' }}-laz
+        path: ${{ env.PROJECT_DIR }}/tool/data
+
+    - name: Terapkan nilai kalibrasi ke config.h
+      shell: bash
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        f=src/newb/config.h
+        sed -i -E "s/^(#define NL_SUN_PATH_YAW)[[:space:]]+[^ ]+/\1 ${{ inputs.sun_yaw }}/" $f
+        sed -i -E "s/^(#define NL_SUN_PATH_TILT)[[:space:]]+[^ ]+/\1 ${{ inputs.sun_tilt }}/" $f
+        sed -i -E "s/^(#define NL_SUN_GLOW_YAW_OFFSET)[[:space:]]+[^ ]+/\1 ${{ inputs.glow_offset }}/" $f
+        sed -i -E "s/^(#define NL_GLOW_SHIMMER)[[:space:]]+[^ ]+/\1 ${{ inputs.shimmer }}/" $f
+        sed -i -E "s/^(#define NL_GLOW_SHIMMER_SPEED)[[:space:]]+[^ ]+/\1 ${{ inputs.shimmer_speed }}/" $f
+        grep -nE "^#define NL_(SUN_PATH|SUN_GLOW|GLOW_SHIMMER)" $f
+
+    - name: Install dependencies
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: pip install -r requirements.txt
+
+    - name: Build (Linux)
+      if: ${{ inputs.platform == 'android' || inputs.platform == 'ios' }}
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        bash build.sh setup
+        bash build.sh pack -p ${{ inputs.platform }} -v ${{ inputs.subversion }} --no-zip
+
+    - name: Build (Windows)
+      if: ${{ inputs.platform == 'windows' || inputs.platform == 'multiplatform' }}
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        .\build.bat setup
+        .\build.bat pack -p ${{ inputs.platform }} -v ${{ inputs.subversion }} --no-zip
+
+    - name: Zip jadi .mcpack
+      shell: bash
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        python -c "import shutil; shutil.make_archive('Newb_Lite_By_Zeyy-${{ inputs.platform }}', 'zip', 'build/pack-${{ inputs.platform }}')"
+        mv Newb_Lite_By_Zeyy-${{ inputs.platform }}.zip Newb_Lite_By_Zeyy-${{ inputs.platform }}.mcpack
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Newb_Lite_By_Zeyy-${{ inputs.platform }}
+        path: ${{ env.PROJECT_DIR }}/Newb_Lite_By_Zeyy-${{ inputs.platform }}.mcpack
